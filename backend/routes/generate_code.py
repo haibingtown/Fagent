@@ -9,7 +9,7 @@ from llm import (
     convert_frontend_str_to_llm,
     stream_claude_response,
     stream_claude_response_native,
-    stream_openai_response,
+    stream_openai_response, stream_qwen_response, stream_ollama_response,
 )
 from openai.types.chat import ChatCompletionMessageParam
 from mock_llm import mock_completion
@@ -109,16 +109,16 @@ async def stream_code(websocket: WebSocket):
         if openai_api_key:
             print("Using OpenAI API key from environment variable")
 
-    if not openai_api_key and (
-        code_generation_model == Llm.GPT_4_VISION
-        or code_generation_model == Llm.GPT_4_TURBO_2024_04_09
-        or code_generation_model == Llm.GPT_4O_2024_05_13
-    ):
-        print("OpenAI API key not found")
-        await throw_error(
-            "No OpenAI API key found. Please add your API key in the settings dialog or add it to backend/.env file. If you add it to .env, make sure to restart the backend server."
-        )
-        return
+    # if not openai_api_key and (
+    #     code_generation_model == Llm.GPT_4_VISION
+    #     or code_generation_model == Llm.GPT_4_TURBO_2024_04_09
+    #     or code_generation_model == Llm.GPT_4O_2024_05_13
+    # ):
+    #     print("OpenAI API key not found")
+    #     await throw_error(
+    #         "No OpenAI API key found. Please add your API key in the settings dialog or add it to backend/.env file. If you add it to .env, make sure to restart the backend server."
+    #     )
+    #     return
 
     # Get the Anthropic API key from the request. Fall back to environment variable if not provided.
     # If neither is provided, we throw an error later only if Claude is used.
@@ -258,8 +258,17 @@ async def stream_code(websocket: WebSocket):
                     callback=lambda x: process_chunk(x),
                 )
                 exact_llm_version = code_generation_model
+            # elif code_generation_model == Llm.GPT_4_VISION:
+            #     completion = await stream_openai_response(
+            #         prompt_messages,  # type: ignore
+            #         api_key=openai_api_key,
+            #         base_url=openai_base_url,
+            #         callback=lambda x: process_chunk(x),
+            #         model=code_generation_model,
+            #     )
+            #     exact_llm_version = code_generation_model
             else:
-                completion = await stream_openai_response(
+                completion = await stream_ollama_response(
                     prompt_messages,  # type: ignore
                     api_key=openai_api_key,
                     base_url=openai_base_url,
@@ -267,6 +276,14 @@ async def stream_code(websocket: WebSocket):
                     model=code_generation_model,
                 )
                 exact_llm_version = code_generation_model
+                # completion = await stream_qwen_response(
+                #     prompt_messages,  # type: ignore
+                #     api_key=openai_api_key,
+                #     base_url=openai_base_url,
+                #     callback=lambda x: process_chunk(x),
+                #     model=code_generation_model,
+                # )
+                # exact_llm_version = code_generation_model
         except openai.AuthenticationError as e:
             print("[GENERATE_CODE] Authentication failed", e)
             error_message = (

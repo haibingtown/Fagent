@@ -1,11 +1,18 @@
+import json
 from enum import Enum
 from typing import Any, Awaitable, Callable, List, cast
+
+import dashscope
+import requests
+import sseclient
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionChunk
 from config import IS_DEBUG_ENABLED
 from debug.DebugFileWriter import DebugFileWriter
+from dashscope import MultiModalConversation
 
+from prompts import Fabric_SYSTEM_PROMPT
 from utils import pprint_prompt
 
 
@@ -29,18 +36,113 @@ def convert_frontend_str_to_llm(frontend_str: str) -> Llm:
         return Llm(frontend_str)
 
 
-async def stream_openai_response(
-    messages: List[ChatCompletionMessageParam],
-    api_key: str,
-    base_url: str | None,
-    callback: Callable[[str], Awaitable[None]],
-    model: Llm,
+async def stream_qwen_response(
+        messages: List[ChatCompletionMessageParam],
+        api_key: str,
+        base_url: str | None,
+        callback: Callable[[str], Awaitable[None]],
+        model: Llm,
 ) -> str:
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    # client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    dashscope.api_key = 'xxxxx'
+    params = {
+        "model": model.value,
+        "messages": messages,
+        "stream": True,
+        "timeout": 600,
+        "temperature": 0.0,
+    }
+    # Add 'max_tokens' only if the model is a GPT4 vision or Turbo model
+    if (
+            model == Llm.GPT_4_VISION
+            or model == Llm.GPT_4_TURBO_2024_04_09
+            or model == Llm.GPT_4O_2024_05_13
+    ):
+        params["max_tokens"] = 4096
+
+        # Base parameters
+
+    response = MultiModalConversation.call(model="qwen-vl-plus",
+                                         messages=messages,
+                                         stream=True)
+
+    # stream = await client.chat.completions.create(**params)  # type: ignore
+    full_response = ""
+    for chunk in response:  # type: ignore
+        # assert isinstance(chunk, ChatCompletionChunk)
+        if chunk.output and len(chunk.output.choices) > 0 and chunk.output.choices[0]['message'] and chunk.output.choices[0]['message']['content']:
+            content = chunk.output.choices[0]['message']['content'][0]['text'] or ""
+            full_response = content
+            await callback(content)
+
+    # await client.close()
+
+    return full_response
+
+
+async def stream_ollama_response(
+        messages: List[ChatCompletionMessageParam],
+        api_key: str,
+        base_url: str | None,
+        callback: Callable[[str], Awaitable[None]],
+        model: Llm,
+) -> str:
+    # base_url = "http://localhost:11434/"
+    # client = AsyncOpenAI(api_key="xxxx", base_url=base_url)
+    url = "http://localhost:11434/api/chat"
+    messages = [
+        {
+            "role": "system",
+            "content": Fabric_SYSTEM_PROMPT
+        },
+        {
+            "role": "user",
+            "content": "https://huggingface.co/Zigeng/SlimSAM-uniform-77/resolve/main/images/paper/prompt.PNG",
+        },
+    ]
+    # Base parameters
+    payload = json.dumps({
+        "model": "llava",
+        "messages": messages,
+        "stream": True,
+        "timeout": 600,
+        "temperature": 0.0,
+    })
+
+    headers = {
+        'Content-Type': 'application/json'
+    }
+
+    response = requests.request("POST", url=url, stream=True, headers=headers, data=payload,
+                                timeout=600)
+
+    full_response = ""
+    for line in response.iter_lines():
+        body = json.loads(line)
+        if "error" in body:
+            raise Exception(body["error"])
+        if body.get("done") is False:
+            message = body.get("message", "")
+            content = message.get("content", "")
+            full_response += content
+            # the response streams one token at a time, print that as we receive it
+            await callback(content)
+
+    return full_response
+
+async def stream_openai_response(
+        messages: List[ChatCompletionMessageParam],
+        api_key: str,
+        base_url: str | None,
+        callback: Callable[[str], Awaitable[None]],
+        model: Llm,
+) -> str:
+    base_url = "http://localhost:11434/"
+    client = AsyncOpenAI(api_key="xxxx", base_url=base_url)
 
     # Base parameters
     params = {
-        "model": model.value,
+        "model": "llava",
         "messages": messages,
         "stream": True,
         "timeout": 600,
@@ -49,9 +151,9 @@ async def stream_openai_response(
 
     # Add 'max_tokens' only if the model is a GPT4 vision or Turbo model
     if (
-        model == Llm.GPT_4_VISION
-        or model == Llm.GPT_4_TURBO_2024_04_09
-        or model == Llm.GPT_4O_2024_05_13
+            model == Llm.GPT_4_VISION
+            or model == Llm.GPT_4_TURBO_2024_04_09
+            or model == Llm.GPT_4O_2024_05_13
     ):
         params["max_tokens"] = 4096
 
@@ -71,11 +173,10 @@ async def stream_openai_response(
 
 # TODO: Have a seperate function that translates OpenAI messages to Claude messages
 async def stream_claude_response(
-    messages: List[ChatCompletionMessageParam],
-    api_key: str,
-    callback: Callable[[str], Awaitable[None]],
+        messages: List[ChatCompletionMessageParam],
+        api_key: str,
+        callback: Callable[[str], Awaitable[None]],
 ) -> str:
-
     client = AsyncAnthropic(api_key=api_key)
 
     # Base parameters
@@ -111,11 +212,11 @@ async def stream_claude_response(
 
     # Stream Claude response
     async with client.messages.stream(
-        model=model.value,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system_prompt,
-        messages=claude_messages,  # type: ignore
+            model=model.value,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system_prompt,
+            messages=claude_messages,  # type: ignore
     ) as stream:
         async for text in stream.text_stream:
             await callback(text)
@@ -130,14 +231,13 @@ async def stream_claude_response(
 
 
 async def stream_claude_response_native(
-    system_prompt: str,
-    messages: list[Any],
-    api_key: str,
-    callback: Callable[[str], Awaitable[None]],
-    include_thinking: bool = False,
-    model: Llm = Llm.CLAUDE_3_OPUS,
+        system_prompt: str,
+        messages: list[Any],
+        api_key: str,
+        callback: Callable[[str], Awaitable[None]],
+        include_thinking: bool = False,
+        model: Llm = Llm.CLAUDE_3_OPUS,
 ) -> str:
-
     client = AsyncAnthropic(api_key=api_key)
 
     # Base model parameters
@@ -168,11 +268,11 @@ async def stream_claude_response_native(
         pprint_prompt(messages_to_send)
 
         async with client.messages.stream(
-            model=model.value,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system_prompt,
-            messages=messages_to_send,  # type: ignore
+                model=model.value,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_prompt,
+                messages=messages_to_send,  # type: ignore
         ) as stream:
             async for text in stream.text_stream:
                 print(text, end="", flush=True)
