@@ -2,12 +2,12 @@ import json
 import time
 
 import requests
-import sseclient
 
+from server.fabric.render import render_html
 
 Fabric_SYSTEM_PROMPT = """
 You are an expert at building json for fabric.js.
-You take screenshots of a reference web page from the user, and then build a SVG that looks exactly like the screenshot.
+You take screenshots of a reference web page from the user, and then build a canvas that looks exactly like the screenshot.
 
 - Make sure the json render by fabric.js looks exactly like the screenshot.
 - Pay close attention to background color, text color, font size, font family, 
@@ -18,12 +18,13 @@ padding, margin, border, etc. Match the colors and sizes exactly.
 - For images, use placeholder images from https://placehold.co and include a detailed description of the image in the alt text so that an image generation AI can generate the image later.
 - You can use Google Fonts
 
-Return only the full code in <json></json> tags.
-Do not include markdown "```" or "```svg" at the start or end.
+Return only the full code.
+Do not include markdown "```" or "```" at the start or end.
 """
 
+
 class OpenLLM:
-    url = "http://localhost:11434/v1/chat/completions"
+    url = "http://localhost:11434/api/chat"
 
     @classmethod
     def create_chat(
@@ -49,32 +50,6 @@ class OpenLLM:
         response = requests.request("POST", cls.url, stream=stream, headers=headers, data=payload,
                                     timeout=request_timeout)
         return response
-
-    @classmethod
-    def gpt_stream(cls, data):
-        start = time.time()
-        messages = data.get("messages")
-        response = cls.create_chat(
-            model=data.get("model"),
-            messages=messages,
-            temperature=data.get("temperature") or 0.7,
-            stream=True
-        )
-        client = sseclient.SSEClient(response)
-        for event in client.events():
-            if event.data == "[DONE]":
-                break
-            res = []
-            chunk = json.loads(event.data)
-            for r in chunk["choices"]:
-                if r["delta"].get("content"):
-                    res.append({"content": r["delta"].get("content"), "role": "assistant"})
-            if res:
-                yield res
-        duration = time.time() - start
-        print(
-            f"this baichuan stream chat duration:{duration}, message: {messages}"
-        )
 
     @classmethod
     def gpt(cls, data):
@@ -107,22 +82,50 @@ class OpenLLM:
         print(f"message: {result} \n")
         return result
 
-payload = {
-    "model": "llava",
-    "messages": [
-        {
-            "role": "system",
-            "content": Fabric_SYSTEM_PROMPT
-        },
-        {
-            "role": "user",
-            "content": "https://huggingface.co/Zigeng/SlimSAM-uniform-77/resolve/main/images/paper/prompt.PNG",
-        },
-    ],
-    "result_num": 1
-}
+
+    @classmethod
+    def gpt_stream(cls, data):
+        print("into")
+        start = time.time()
+        messages = data.get("messages")
+        response = cls.create_chat(
+            model=data.get("model"),
+            messages=messages,
+            temperature=data.get("temperature") or 0.7,
+            stream=True
+        )
+        for chunk in response:  # type: ignore
+            # assert isinstance(chunk, ChatCompletionChunk)
+            if chunk.output and len(chunk.output.choices) > 0 and chunk.output.choices[0]['message'] and \
+                    chunk.output.choices[0]['message']['content']:
+                content = chunk.output.choices[0]['message']['content'][0]['text'] or ""
+                full_response = content
+                # await callback(content)
+                print(content)
+                json.loads(chunk)['message']['content']
+            # if res:
+            #     yield res
+        duration = time.time() - start
+        print(
+            f"this baichuan stream chat duration:{duration}, message: {messages}"
+        )
+
 
 if __name__ == "__main__":
-    llm = OpenLLM()
-    result = llm.gpt(payload)
+    payload = {
+        "model": "llava",
+        "messages": [
+            {
+                "role": "system",
+                "content": Fabric_SYSTEM_PROMPT
+            },
+            {
+                "role": "user",
+                "content": "https://huggingface.co/Zigeng/SlimSAM-uniform-77/resolve/main/images/paper/prompt.PNG",
+            },
+        ],
+        "result_num": 1
+    }
+    result = OpenLLM.gpt(payload)
     print(result[0]["content"])
+    render_html(result[0]["content"])
