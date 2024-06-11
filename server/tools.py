@@ -22,3 +22,11 @@ class FontGen(BaseTool):
 
     def generate(self):
         pass
+
+
+class Render(BaseTool):
+    def __init__(self):
+        pass
+
+    def generate(self):
+        pass
